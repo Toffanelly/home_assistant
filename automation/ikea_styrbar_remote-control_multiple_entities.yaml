@@ -1,6 +1,11 @@
 blueprint:
   name: IKEA Styrbar (ZHA) - Smooth & Complete
-  description: "ZHA Styrbar with absolute dimming, selection flash, and smooth transitions."
+  description: >-
+    ZHA Styrbar driving several lights/switches. The arrows cycle which entity is
+    selected (with a selection flash that restores the previous state), on/off
+    toggles the selected entity, and holding on/off dims it using absolute
+    brightness steps. Transition and brightness support are detected per entity,
+    so non-Zigbee (Wi-Fi) bulbs and plain on/off lights work too.
   domain: automation
   input:
     switch_remote:
@@ -25,6 +30,12 @@ blueprint:
       default: true
       selector:
         boolean: {}
+    flash_duration:
+      name: Selection Flash Length (ms)
+      description: "How long the selected entity is blinked before its previous state is restored."
+      default: 300
+      selector:
+        number: {min: 100, max: 1500, step: 50, mode: slider}
     force_brightness:
       name: Force Brightness
       default: false
@@ -37,6 +48,7 @@ blueprint:
         number: {min: 0, max: 100, mode: slider}
     repeat_delay:
       name: Dimming Speed (ms)
+      description: "Time between dim steps. Raise this to 250-400 for cloud-connected Wi-Fi bulbs, which cannot keep up with fast command bursts."
       default: 150
       selector:
         number: {min: 50, max: 1000, step: 10, mode: slider}
@@ -47,7 +59,7 @@ blueprint:
         number: {min: 1, max: 100, mode: slider}
     transition_time:
       name: Transition Smoothness (s)
-      description: "How long the bulb takes to reach the next brightness level. Try 0.2 to 0.4 for smoothness."
+      description: "How long the bulb takes to reach the next brightness level. Try 0.2 to 0.4 for smoothness. Ignored for lights that do not support transitions."
       default: 0.3
       selector:
         number: {min: 0, max: 2, step: 0.1, mode: slider}
@@ -81,80 +93,184 @@ action:
       target_entities: !input targets
       helper: !input selected_target
       flash_enabled: !input enable_flash
+      flash_ms: !input flash_duration
       force_br: !input force_brightness
       br_val: !input brightness_pct
       step_val: !input brightness_step_pct
       delay_val: !input repeat_delay
       trans_val: !input transition_time
-      
+
+      # Never dim all the way to black - the bulb becomes unrecoverable by remote.
+      min_br: 15
+
       # Event Data
       command: "{{ trigger.event.data.command }}"
-      cluster_id: "{{ trigger.event.data.cluster_id | int }}"
-      args: "{{ trigger.event.data.args }}"
-      
+      cluster_id: "{{ trigger.event.data.cluster_id | int(0) }}"
+      args: "{{ trigger.event.data.args | default([], true) }}"
+      params: "{{ trigger.event.data.params | default({}, true) }}"
+
+      # First positional argument. ZHA delivers these as a list on some versions
+      # and as a named-parameter dict on others, so accept either shape.
+      a0: >-
+        {%- if args is mapping and args | count > 0 -%}
+          {{ args.values() | list | first }}
+        {%- elif args is sequence and args is not string and args | count > 0 -%}
+          {{ args[0] }}
+        {%- elif params is mapping and params | count > 0 -%}
+          {{ params.values() | list | first }}
+        {%- else -%}
+          0
+        {%- endif -%}
+
       # Determine active entity
       current_idx: "{{ states(helper) | int(0) }}"
       active_entity: "{{ target_entities[current_idx] if current_idx < target_entities | count else target_entities[0] }}"
+
+      # Snapshot scene used to undo the selection flash. Keyed on the index
+      # helper so two Styrbar instances never share one.
+      flash_scene: "scene.styrbar_flash_{{ helper.split('.')[1] }}"
 
   - choose:
       # 1. CYCLING (Cluster 5)
       - conditions: "{{ command == 'press' and cluster_id == 5 }}"
         sequence:
+          # mode: restart can kill a run mid-flash, leaving that entity blinked
+          # on. Undo any snapshot still outstanding before taking a new one.
+          - if:
+              - condition: template
+                value_template: "{{ states(flash_scene) not in ['unknown', 'unavailable'] }}"
+            then:
+              - service: scene.turn_on
+                target: { entity_id: "{{ flash_scene }}" }
+                continue_on_error: true
+              - service: scene.delete
+                target: { entity_id: "{{ flash_scene }}" }
+                continue_on_error: true
+
           - variables:
-              is_right: "{{ args[0] == 256 }}"
-              new_idx: >
-                {% if is_right %} {{ (current_idx + 1) % target_entities | count }}
-                {% else %} {{ (current_idx - 1 + target_entities | count) % target_entities | count }}
-                {% endif %}
+              is_right: "{{ a0 | int(0) == 256 }}"
+              new_idx: >-
+                {%- set n = target_entities | count -%}
+                {{ ((current_idx + 1) % n) if is_right else ((current_idx - 1 + n) % n) }}
           - service: input_number.set_value
+            target: { entity_id: "{{ helper }}" }
             data:
-              entity_id: "{{ helper }}"
               value: "{{ new_idx }}"
+
           - condition: template
             value_template: "{{ flash_enabled }}"
-          - service: light.turn_on
-            target: { entity_id: "{{ target_entities[new_idx] }}" }
-            data: { flash: short }
+
+          - variables:
+              flash_entity: "{{ target_entities[new_idx | int(0)] }}"
+              flash_dimmable: >-
+                {{ target_entities[new_idx | int(0)].split('.')[0] == 'light'
+                   and state_attr(target_entities[new_idx | int(0)], 'supported_color_modes')
+                       | default([], true) | reject('in', ['onoff']) | list | count > 0 }}
+
+          # Remember the current state, blink, then put it back exactly as it was.
+          - service: scene.create
+            data:
+              scene_id: "styrbar_flash_{{ helper.split('.')[1] }}"
+              snapshot_entities: "{{ [flash_entity] }}"
+          - choose:
+              # Already on: blink it off.
+              - conditions: "{{ is_state(flash_entity, 'on') }}"
+                sequence:
+                  - service: homeassistant.turn_off
+                    target: { entity_id: "{{ flash_entity }}" }
+                    continue_on_error: true
+              # Off and dimmable: blink on gently rather than at full output.
+              - conditions: "{{ flash_dimmable }}"
+                sequence:
+                  - service: light.turn_on
+                    target: { entity_id: "{{ flash_entity }}" }
+                    data: { brightness_pct: 40 }
+                    continue_on_error: true
+            default:
+              - service: homeassistant.turn_on
+                target: { entity_id: "{{ flash_entity }}" }
+                continue_on_error: true
+          - delay: { milliseconds: "{{ flash_ms }}" }
+          - service: scene.turn_on
+            target: { entity_id: "{{ flash_scene }}" }
+            continue_on_error: true
+          - service: scene.delete
+            target: { entity_id: "{{ flash_scene }}" }
             continue_on_error: true
 
       # 2. POWER (Cluster 6)
       - conditions: "{{ command in ['on', 'off'] }}"
         sequence:
+          - variables:
+              can_transition: >-
+                {{ active_entity.split('.')[0] == 'light'
+                   and state_attr(active_entity, 'supported_features') | int(0) | bitwise_and(32) > 0 }}
+              can_dim: >-
+                {{ active_entity.split('.')[0] == 'light'
+                   and state_attr(active_entity, 'supported_color_modes')
+                       | default([], true) | reject('in', ['onoff']) | list | count > 0 }}
           - service: "homeassistant.turn_{{ command }}"
             target: { entity_id: "{{ active_entity }}" }
-            data: >
-              {% if command == 'on' and active_entity.split('.')[0] == 'light' and force_br %}
-                {"brightness_pct": {{ br_val }}, "transition": {{ trans_val }}}
-              {% elif command == 'on' and active_entity.split('.')[0] == 'light' %}
-                {"transition": {{ trans_val }}}
-              {% else %} {} {% endif %}
+            data: >-
+              {%- set d = {} -%}
+              {%- if can_transition -%}{%- set d = dict(d, transition=trans_val) -%}{%- endif -%}
+              {%- if command == 'on' and force_br and can_dim -%}{%- set d = dict(d, brightness_pct=br_val) -%}{%- endif -%}
+              {{ d }}
 
       # 3. DIMMING (Cluster 8)
-      - conditions: "{{ command == 'move' and cluster_id == 8 }}"
+      # Styrbar sends move_with_on_off when holding "on" and move when holding
+      # "off", so both have to be matched here.
+      - conditions: "{{ command in ['move', 'move_with_on_off', 'step', 'step_with_on_off'] }}"
         sequence:
+          - variables:
+              can_dim: >-
+                {{ active_entity.split('.')[0] == 'light'
+                   and state_attr(active_entity, 'supported_color_modes')
+                       | default([], true) | reject('in', ['onoff']) | list | count > 0 }}
+              can_transition: >-
+                {{ active_entity.split('.')[0] == 'light'
+                   and state_attr(active_entity, 'supported_features') | int(0) | bitwise_and(32) > 0 }}
+              # move_mode / step_mode: 0 = up, 1 = down.
+              is_up: >-
+                {%- set m = params.move_mode if params.move_mode is defined
+                            else (params.step_mode if params.step_mode is defined else a0) -%}
+                {{ m | int(0) == 0 }}
+              step_raw: "{{ (step_val | float(10) * 2.55) | round(0) | int }}"
+
+          # Nothing to dim on a switch or an on/off-only bulb.
+          - condition: template
+            value_template: "{{ can_dim }}"
+
           - repeat:
-              while: "{{ true }}"
+              # Bounded so a missed "stop" event (remote out of range) cannot
+              # leave this looping forever.
+              while: "{{ (repeat.index if repeat is defined else 1) <= 200 }}"
               sequence:
                 - variables:
-                    is_up: "{{ args[0] == 0 }}"
                     current_br: "{{ state_attr(active_entity, 'brightness') | int(0) }}"
-                    new_br: >
-                      {% if is_up %} {{ [current_br + (step_val * 2.55), 255] | min | int }}
-                      {% else %} {{ [current_br - (step_val * 2.55), 15] | max | int }}
-                      {% endif %}
-                
+                    new_br: >-
+                      {%- if is_up -%}
+                        {{ [current_br + step_raw, 255] | min | int }}
+                      {%- else -%}
+                        {{ [current_br - step_raw, min_br] | max | int }}
+                      {%- endif -%}
+
+                # Stop at either end of the range instead of spinning.
                 - condition: template
-                  value_template: "{{ is_up or current_br > 15 }}"
-                
+                  value_template: "{{ (is_up and current_br < 255) or (not is_up and current_br > min_br) }}"
+
                 - service: light.turn_on
                   target: { entity_id: "{{ active_entity }}" }
-                  data:
-                    brightness: "{{ new_br }}"
-                    transition: "{{ trans_val }}"
+                  data: >-
+                    {%- set d = {'brightness': new_br | int} -%}
+                    {%- if can_transition -%}{%- set d = dict(d, transition=trans_val) -%}{%- endif -%}
+                    {{ d }}
                 - delay: { milliseconds: "{{ delay_val }}" }
 
       # 4. STOP (Cluster 8)
-      - conditions: "{{ command == 'stop' and cluster_id == 8 }}"
+      # mode: restart is what actually ends the dim loop above - this branch
+      # just keeps the release event from falling through to anything else.
+      - conditions: "{{ command in ['stop', 'stop_with_on_off'] }}"
         sequence:
           - stop: "Stopped Dimming"
 
@@ -162,11 +278,11 @@ action:
       - conditions: "{{ cluster_id == 5 and command in ['hold', 'release'] }}"
         sequence:
           - choose:
-              - conditions: "{{ args[0] == 3329 and command == 'hold' }}"
+              - conditions: "{{ a0 | int(0) == 3329 and command == 'hold' }}"
                 sequence: !input arrow_left_hold
-              - conditions: "{{ args[0] == 3329 and command == 'release' }}"
+              - conditions: "{{ a0 | int(0) == 3329 and command == 'release' }}"
                 sequence: !input arrow_left_release
-              - conditions: "{{ args[0] == 3328 and command == 'hold' }}"
+              - conditions: "{{ a0 | int(0) == 3328 and command == 'hold' }}"
                 sequence: !input arrow_right_hold
-              - conditions: "{{ args[0] == 3328 and command == 'release' }}"
+              - conditions: "{{ a0 | int(0) == 3328 and command == 'release' }}"
                 sequence: !input arrow_right_release
