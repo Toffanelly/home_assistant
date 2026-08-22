@@ -2,10 +2,12 @@ blueprint:
   name: IKEA Styrbar (ZHA) - Smooth & Complete
   description: >-
     ZHA Styrbar driving several lights/switches. The arrows cycle which entity is
-    selected (with a selection flash that restores the previous state), on/off
-    toggles the selected entity, and holding on/off dims it using absolute
-    brightness steps. Transition and brightness support are detected per entity,
-    so non-Zigbee (Wi-Fi) bulbs and plain on/off lights work too.
+    selected (using the bulb's own flash where it supports one, otherwise a blink
+    that is put back afterwards), on/off toggles the selected entity, and holding
+    on/off dims it using absolute brightness steps. Transition and brightness
+    support are detected per entity, so non-Zigbee (Wi-Fi) bulbs and plain on/off
+    lights work too. A selection flash never writes a brightness value, so the
+    level a bulb returns to when switched back on is left untouched.
   domain: automation
   input:
     switch_remote:
@@ -32,7 +34,7 @@ blueprint:
         boolean: {}
     flash_duration:
       name: Selection Flash Length (ms)
-      description: "How long the selected entity is blinked before its previous state is restored."
+      description: "Only used for entities without a built-in flash (Wi-Fi bulbs, switches, and any light that is currently off). Bulbs with a native flash blink at their own speed."
       default: 300
       selector:
         number: {min: 100, max: 1500, step: 50, mode: slider}
@@ -106,36 +108,45 @@ action:
       # Event Data
       command: "{{ trigger.event.data.command }}"
       cluster_id: "{{ trigger.event.data.cluster_id | int(0) }}"
-      args: "{{ trigger.event.data.args | default([], true) }}"
-      params: "{{ trigger.event.data.params | default({}, true) }}"
 
-      # First positional argument. ZHA delivers these as a list on some versions
-      # and as a named-parameter dict on others, so accept either shape.
+      # First positional argument, as a number. ZHA delivers command arguments
+      # as a positional list on some versions and as a named-parameter dict on
+      # others, hence the shape tests.
+      #
+      # The int() conversions have to happen HERE, against the live event, and
+      # the raw list must never be parked in a variable on the way. ZHA passes
+      # zigpy enums (MoveMode.Down and friends); a variable is rendered to text
+      # and parsed back, that text is "<MoveMode.Down: 1>", which is not a
+      # Python literal, so the whole list silently degrades into a string and
+      # every shape test below would miss. int() on the live enum yields 1.
+      #
+      # -1 means nothing was readable, which must stay distinct from a real 0.
       a0: >-
-        {%- if args is mapping and args | count > 0 -%}
-          {{ args.values() | list | first }}
-        {%- elif args is sequence and args is not string and args | count > 0 -%}
-          {{ args[0] }}
-        {%- elif params is mapping and params | count > 0 -%}
-          {{ params.values() | list | first }}
+        {%- set d = trigger.event.data -%}
+        {%- if d.args is defined and d.args is mapping and d.args | count > 0 -%}
+          {{ d.args.values() | list | first | int(-1) }}
+        {%- elif d.args is defined and d.args is sequence and d.args is not string and d.args | count > 0 -%}
+          {{ d.args[0] | int(-1) }}
+        {%- elif d.params is defined and d.params is mapping and d.params | count > 0 -%}
+          {{ d.params.values() | list | first | int(-1) }}
         {%- else -%}
-          0
+          -1
         {%- endif -%}
 
       # Determine active entity
       current_idx: "{{ states(helper) | int(0) }}"
       active_entity: "{{ target_entities[current_idx] if current_idx < target_entities | count else target_entities[0] }}"
 
-      # Snapshot scene used to undo the selection flash. Keyed on the index
-      # helper so two Styrbar instances never share one.
+      # Snapshot scene used to undo a hand-made selection blink. Keyed on the
+      # index helper so two Styrbar instances never share one.
       flash_scene: "scene.styrbar_flash_{{ helper.split('.')[1] }}"
 
   - choose:
       # 1. CYCLING (Cluster 5)
       - conditions: "{{ command == 'press' and cluster_id == 5 }}"
         sequence:
-          # mode: restart can kill a run mid-flash, leaving that entity blinked
-          # on. Undo any snapshot still outstanding before taking a new one.
+          # mode: restart can kill a run mid-blink, leaving that entity inverted.
+          # Undo any snapshot still outstanding before taking a new one.
           - if:
               - condition: template
                 value_template: "{{ states(flash_scene) not in ['unknown', 'unavailable'] }}"
@@ -162,41 +173,51 @@ action:
 
           - variables:
               flash_entity: "{{ target_entities[new_idx | int(0)] }}"
-              flash_dimmable: >-
+              # Zigbee bulbs implement the FLASH feature (supported_features bit
+              # 8) natively - the bulb blinks itself and settles back on its own
+              # state. Wi-Fi bulbs and switches generally do not.
+              flash_native: >-
                 {{ target_entities[new_idx | int(0)].split('.')[0] == 'light'
-                   and state_attr(target_entities[new_idx | int(0)], 'supported_color_modes')
-                       | default([], true) | reject('in', ['onoff']) | list | count > 0 }}
+                   and state_attr(target_entities[new_idx | int(0)], 'supported_features')
+                       | int(0) | bitwise_and(8) > 0 }}
 
-          # Remember the current state, blink, then put it back exactly as it was.
-          - service: scene.create
-            data:
-              scene_id: "styrbar_flash_{{ helper.split('.')[1] }}"
-              snapshot_entities: "{{ [flash_entity] }}"
           - choose:
-              # Already on: blink it off.
-              - conditions: "{{ is_state(flash_entity, 'on') }}"
-                sequence:
-                  - service: homeassistant.turn_off
-                    target: { entity_id: "{{ flash_entity }}" }
-                    continue_on_error: true
-              # Off and dimmable: blink on gently rather than at full output.
-              - conditions: "{{ flash_dimmable }}"
+              # Lit bulb with a built-in flash: nothing in Home Assistant
+              # changes, so there is nothing to snapshot or put back.
+              - conditions: "{{ flash_native and is_state(flash_entity, 'on') }}"
                 sequence:
                   - service: light.turn_on
                     target: { entity_id: "{{ flash_entity }}" }
-                    data: { brightness_pct: 40 }
+                    data: { flash: short }
                     continue_on_error: true
+
+            # Everything else has to be blinked by hand and restored.
             default:
-              - service: homeassistant.turn_on
-                target: { entity_id: "{{ flash_entity }}" }
+              - service: scene.create
+                data:
+                  scene_id: "styrbar_flash_{{ helper.split('.')[1] }}"
+                  snapshot_entities: "{{ [flash_entity] }}"
+              - choose:
+                  - conditions: "{{ is_state(flash_entity, 'on') }}"
+                    sequence:
+                      - service: homeassistant.turn_off
+                        target: { entity_id: "{{ flash_entity }}" }
+                        continue_on_error: true
+                default:
+                  # Deliberately no brightness: naming one would overwrite the
+                  # level the bulb returns to the next time it is switched on.
+                  - service: homeassistant.turn_on
+                    target: { entity_id: "{{ flash_entity }}" }
+                    continue_on_error: true
+              - delay: { milliseconds: "{{ flash_ms }}" }
+              # Restoring an "off" snapshot only switches the entity back off -
+              # it writes no brightness either, so the remembered level survives.
+              - service: scene.turn_on
+                target: { entity_id: "{{ flash_scene }}" }
                 continue_on_error: true
-          - delay: { milliseconds: "{{ flash_ms }}" }
-          - service: scene.turn_on
-            target: { entity_id: "{{ flash_scene }}" }
-            continue_on_error: true
-          - service: scene.delete
-            target: { entity_id: "{{ flash_scene }}" }
-            continue_on_error: true
+              - service: scene.delete
+                target: { entity_id: "{{ flash_scene }}" }
+                continue_on_error: true
 
       # 2. POWER (Cluster 6)
       - conditions: "{{ command in ['on', 'off'] }}"
@@ -230,11 +251,28 @@ action:
               can_transition: >-
                 {{ active_entity.split('.')[0] == 'light'
                    and state_attr(active_entity, 'supported_features') | int(0) | bitwise_and(32) > 0 }}
-              # move_mode / step_mode: 0 = up, 1 = down.
+              # move_mode / step_mode: 0 = up, 1 = down. Read straight off the
+              # live event and coerced here, for the same enum reason as a0.
+              move_mode: >-
+                {%- set p = trigger.event.data.params -%}
+                {%- if p is defined and p is mapping and p.move_mode is defined -%}
+                  {{ p.move_mode | int(-1) }}
+                {%- elif p is defined and p is mapping and p.step_mode is defined -%}
+                  {{ p.step_mode | int(-1) }}
+                {%- else -%}
+                  -1
+                {%- endif -%}
+              # Anything unreadable falls through to down, because up always
+              # arrives as the distinct *_with_on_off command that the last
+              # branch recognises by name.
               is_up: >-
-                {%- set m = params.move_mode if params.move_mode is defined
-                            else (params.step_mode if params.step_mode is defined else a0) -%}
-                {{ m | int(0) == 0 }}
+                {%- if move_mode | int(-1) >= 0 -%}
+                  {{ move_mode | int(1) == 0 }}
+                {%- elif a0 | int(-1) >= 0 -%}
+                  {{ a0 | int(1) == 0 }}
+                {%- else -%}
+                  {{ command.endswith('_with_on_off') }}
+                {%- endif -%}
               step_raw: "{{ (step_val | float(10) * 2.55) | round(0) | int }}"
 
           # Nothing to dim on a switch or an on/off-only bulb.
