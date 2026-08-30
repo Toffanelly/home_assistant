@@ -222,6 +222,14 @@ action:
       # 2. POWER (Cluster 6)
       - conditions: "{{ command in ['on', 'off'] }}"
         sequence:
+          # Switching off something already off should be a no-op, but ZHA sends
+          # turn_off-with-transition as MoveToLevelWithOnOff(level 0), and a bulb
+          # that is already dark reads that as "switch on and ramp to the lowest
+          # level" rather than staying off. So don't send anything at all.
+          # Deliberately limited to the off case: pressing "on" on a lit bulb
+          # still goes through, which is what re-applies Force Brightness.
+          - condition: template
+            value_template: "{{ not (command == 'off' and is_state(active_entity, 'off')) }}"
           - variables:
               can_transition: >-
                 {{ active_entity.split('.')[0] == 'light'
