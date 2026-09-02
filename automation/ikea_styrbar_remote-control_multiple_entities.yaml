@@ -70,45 +70,30 @@ blueprint:
       description: >-
         What holding an arrow does. "Custom actions" runs the two long-press
         actions at the bottom of this form, which is the original behaviour.
-        "Cycle presets" steps the selected light through the preset list below:
-        right arrow for the next preset, left arrow for the previous one.
+        "Adjust colour temperature" ramps the selected light while the arrow is
+        held: left towards warm, right towards cold. Lights that have no
+        tunable white are left alone.
       default: custom
       selector:
         select:
           options:
             - label: Run the custom long-press actions
               value: custom
-            - label: Cycle through the light presets below
-              value: presets
-    light_presets:
-      name: Light presets
+            - label: Adjust colour temperature (left warmer, right colder)
+              value: color_temp
+    color_temp_step:
+      name: Colour Temperature Step (K)
       description: >-
-        One entry per long press, applied to the currently selected light. Each
-        entry is handed straight to light.turn_on, so this is not limited to
-        colour - color_temp_kelvin, rgb_color, hs_color, brightness_pct, effect
-        and anything else that action accepts all work. Entries a given bulb
-        cannot honour are skipped without stopping the cycle. The default list
-        is a warm white followed by five colours, so the cycle returns to white.
-        Only used when the setting above is "Cycle presets".
-      default:
-        - color_temp_kelvin: 2700
-        - rgb_color: [255, 0, 0]
-        - rgb_color: [255, 140, 0]
-        - rgb_color: [0, 200, 60]
-        - rgb_color: [0, 90, 255]
-        - rgb_color: [150, 0, 255]
+        Kelvin added or removed per step while an arrow is held. The ramp is
+        paced by "Dimming Speed" above and stops at whatever range the bulb
+        reports, so it never has to be tuned per bulb. The default crosses a
+        typical bulb's whole range in roughly three seconds; raise it if that
+        feels sluggish, lower it if the ends arrive too fast to stop on a
+        middle value. Only used when the setting above is "Adjust colour
+        temperature".
+      default: 100
       selector:
-        object: {}
-    preset_index_helper:
-      name: Preset index helper
-      description: >-
-        A second input_number (min 0, max at least one less than the number of
-        presets, step 1) remembering which preset is active. Required by
-        "Cycle presets"; leave empty otherwise.
-      default: []
-      selector:
-        entity:
-          domain: input_number
+        number: {min: 25, max: 1000, step: 25, mode: slider}
     arrow_left_hold:
       name: Long press - left
       default: []
@@ -146,16 +131,7 @@ action:
       delay_val: !input repeat_delay
       trans_val: !input transition_time
       hold_behavior: !input arrow_hold_behavior
-      presets: !input light_presets
-      preset_helper: !input preset_index_helper
-
-      # Preset cycling needs both switching on and a helper to count in. When
-      # anything is missing the arrows fall back to the custom actions, so a
-      # half-finished setup degrades instead of erroring.
-      preset_ready: >-
-        {{ hold_behavior == 'presets'
-           and preset_helper is string and preset_helper | length > 0
-           and presets is sequence and presets is not string and presets | count > 0 }}
+      ct_step: !input color_temp_step
 
       # Never dim all the way to black - the bulb becomes unrecoverable by remote.
       min_br: 15
@@ -195,6 +171,15 @@ action:
       # Snapshot scene used to undo a hand-made selection blink. Keyed on the
       # index helper so two Styrbar instances never share one.
       flash_scene: "scene.styrbar_flash_{{ helper.split('.')[1] }}"
+
+      # Colour temperature needs no helper: the current value is read off the
+      # bulb and the range is whatever the bulb reports. Anything without a
+      # tunable white falls through to the custom actions rather than erroring.
+      # Must stay below active_entity - variables render in order.
+      ct_ready: >-
+        {{ hold_behavior == 'color_temp'
+           and active_entity.split('.')[0] == 'light'
+           and 'color_temp' in (state_attr(active_entity, 'supported_color_modes') | default([], true)) }}
 
   - choose:
       # 1. CYCLING (Cluster 5)
@@ -379,42 +364,68 @@ action:
       - conditions: "{{ cluster_id == 5 and command in ['hold', 'release'] }}"
         sequence:
           - choose:
-              # Preset cycling. Right (3328) steps forward, left (3329) back.
+              # Colour temperature ramp. Right (3328) colder, left (3329) warmer.
               # Only claims the "hold" event, so custom release actions still
-              # run alongside it if someone has configured them.
+              # run alongside it if someone has configured them. The matching
+              # "release" restarts the automation, which is what ends the ramp -
+              # the same mechanism the brightness loop relies on.
               - conditions: >-
-                  {{ preset_ready and command == 'hold' and a0 | int(0) in [3328, 3329] }}
+                  {{ ct_ready and command == 'hold' and a0 | int(0) in [3328, 3329] }}
                 sequence:
                   - variables:
                       can_transition: >-
                         {{ active_entity.split('.')[0] == 'light'
                            and state_attr(active_entity, 'supported_features') | int(0) | bitwise_and(32) > 0 }}
-                      # Modulo also re-anchors an index left over from a longer
-                      # preset list, so shortening the list cannot go outrange.
-                      preset_idx: >-
-                        {%- set n = presets | count -%}
-                        {%- set cur = states(preset_helper) | int(0) -%}
-                        {%- if a0 | int(0) == 3328 -%}
-                          {{ (cur + 1) % n }}
+                      colder: "{{ a0 | int(0) == 3328 }}"
+                      # The bulb's own limits, so no per-bulb tuning is needed.
+                      ct_min: "{{ state_attr(active_entity, 'min_color_temp_kelvin') | int(2000) }}"
+                      ct_max: "{{ state_attr(active_entity, 'max_color_temp_kelvin') | int(6500) }}"
+                      # Where the ramp starts. A bulb showing no colour
+                      # temperature (off, or currently in a colour mode) has no
+                      # value to walk from, so start at the middle of its range.
+                      ct_start: >-
+                        {%- set c = state_attr(active_entity, 'color_temp_kelvin') | int(0) -%}
+                        {%- if c > 0 -%}
+                          {{ c }}
                         {%- else -%}
-                          {{ (cur - 1 + n) % n }}
+                          {{ ((ct_min | int + ct_max | int) / 2) | round(0) | int }}
                         {%- endif -%}
-                  - service: input_number.set_value
-                    target: { entity_id: "{{ preset_helper }}" }
-                    data:
-                      value: "{{ preset_idx }}"
-                  # continue_on_error keeps a preset the bulb cannot honour
-                  # (colour on a white-only lamp) from stopping the cycle.
-                  - service: light.turn_on
-                    target: { entity_id: "{{ active_entity }}" }
-                    data: >-
-                      {%- set p = presets[preset_idx | int(0)] -%}
-                      {%- if can_transition -%}
-                        {{ dict(p, transition=trans_val) }}
-                      {%- else -%}
-                        {{ p }}
-                      {%- endif -%}
-                    continue_on_error: true
+
+                  - repeat:
+                      # Bounded like the brightness loop, in case the release
+                      # event is lost to a dropped Zigbee packet.
+                      while: "{{ (repeat.index if repeat is defined else 1) <= 200 }}"
+                      sequence:
+                        # Stepped off ct_start by iteration count rather than by
+                        # re-reading the bulb, so a slow light reporting its
+                        # state late cannot stall the ramp.
+                        - variables:
+                            ct_target: >-
+                              {%- set delta = (ct_step | int(250)) * (repeat.index | int(1)) -%}
+                              {%- set raw = ct_start | int + (delta if colder else -delta) -%}
+                              {{ [[raw, ct_min | int] | max, ct_max | int] | min }}
+
+                        - service: light.turn_on
+                          target: { entity_id: "{{ active_entity }}" }
+                          data: >-
+                            {%- set d = {'color_temp_kelvin': ct_target | int} -%}
+                            {%- if can_transition -%}
+                              {{ dict(d, transition=trans_val) }}
+                            {%- else -%}
+                              {{ d }}
+                            {%- endif -%}
+                          continue_on_error: true
+
+                        # Once the end of the bulb's range has been applied there
+                        # is nothing further to send, so stop rather than spin.
+                        - if:
+                            - condition: template
+                              value_template: >-
+                                {{ ct_target | int == (ct_max if colder else ct_min) | int }}
+                          then:
+                            - stop: "Reached the end of the bulb's colour temperature range"
+
+                        - delay: { milliseconds: "{{ delay_val }}" }
 
               # Custom long-press actions (the original behaviour).
               - conditions: "{{ a0 | int(0) == 3329 and command == 'hold' }}"
