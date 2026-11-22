@@ -9,7 +9,8 @@ blueprint:
     lights work too. A selection flash never writes a brightness value, so the
     level a bulb returns to when switched back on is left untouched. Optionally,
     double-click arrows to select a scene, up to activate it, or down to switch
-    off its lights and switches. Scene selection does not activate the scene.
+    off all configured lights and switches, including members of every configured
+    scene. Scene selection does not activate the scene.
   domain: automation
   source_url: https://github.com/Toffanelly/home_assistant/blob/main/automation/ikea_styrbar_remote-control_multiple_entities.yaml
   input:
@@ -34,9 +35,9 @@ blueprint:
     scenes:
       name: Scenes (optional)
       description: >-
-        Ordered scene list. Use Home Assistant scenes that expose their members
-        in the entity_id attribute for double-down to work. Activating a scene
-        applies its saved states, including any saved off states.
+        Ordered scene list. Double-down switches off all targets plus the lights
+        and switches listed in every scene's entity_id attribute. Activating a
+        scene applies its saved states, including any saved off states.
       default: []
       selector:
         entity:
@@ -360,16 +361,21 @@ action:
                 - conditions: "{{ click_command == 'off' }}"
                   sequence:
                     - variables:
-                        scene_on_entities: >-
-                          {{ expand(state_attr(active_scene, 'entity_id') | default([], true))
+                        all_on_entities: >-
+                          {%- set ns = namespace(entities=expand(target_entities)) -%}
+                          {%- for scene in scene_entities -%}
+                            {%- set ns.entities = ns.entities
+                                + expand(state_attr(scene, 'entity_id') | default([], true)) -%}
+                          {%- endfor -%}
+                          {{ ns.entities
                              | selectattr('domain', 'in', ['light', 'switch'])
                              | selectattr('state', 'eq', 'on')
-                             | map(attribute='entity_id') | list }}
+                             | map(attribute='entity_id') | unique | list }}
                     # Never send turn_off-with-transition to an already dark bulb.
-                    - if: "{{ scene_on_entities | count > 0 }}"
+                    - if: "{{ all_on_entities | count > 0 }}"
                       then:
                         - service: homeassistant.turn_off
-                          target: { entity_id: "{{ scene_on_entities }}" }
+                          target: { entity_id: "{{ all_on_entities }}" }
           else:
             - choose:
                 # 1. CYCLING (Cluster 5)

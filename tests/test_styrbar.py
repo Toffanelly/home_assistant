@@ -74,12 +74,35 @@ async def test_activate_selected_scene_applies_saved_off_states(make_remote):
     assert remote.attr("light.ceiling", "brightness") == 60
 
 
-async def test_double_down_only_turns_off_lit_scene_lights_and_switches(make_remote):
+@pytest.mark.parametrize("scene_index", [0, 1])
+async def test_double_down_turns_off_all_configured_lights_and_switches(
+    make_remote, scene_index
+):
     remote = await make_remote()
     remote.hass.states.async_set(
         "light.desk", "on", dict(remote.hass.states.get("light.desk").attributes)
     )
     remote.hass.states.async_set("switch.lamp", "on")
+    remote.hass.states.async_set("light.scene_only", "on")
+    remote.hass.states.async_set("light.other_scene_only", "on")
+    # Only the target list supplies this switch, and only the other scene
+    # supplies other_scene_only. Shared scene members must be sent once.
+    remote.hass.states.async_set(
+        "scene.evening",
+        "unknown",
+        {
+            "entity_id": ["light.other_scene_only", "light.desk"],
+        },
+    )
+    await remote.hass.services.async_call(
+        "input_number",
+        "set_value",
+        {
+            "entity_id": "input_number.scene",
+            "value": scene_index,
+        },
+        blocking=True,
+    )
     remote.hass.states.async_set("light.unreachable", "unavailable")
     remote.hass.states.async_set("media_player.tv", "on")
     remote.hass.states.async_set("light.unrelated", "on")
@@ -90,7 +113,7 @@ async def test_double_down_only_turns_off_lit_scene_lights_and_switches(make_rem
             "entity_id": [
                 "light.desk",
                 "light.ceiling",
-                "switch.lamp",
+                "light.scene_only",
                 "light.unreachable",
                 "media_player.tv",
             ]
@@ -101,7 +124,15 @@ async def test_double_down_only_turns_off_lit_scene_lights_and_switches(make_rem
     await remote.send("off")
     assert len(remote.calls) == 1
     assert remote.calls[0][:2] == ("homeassistant", "turn_off")
-    assert set(remote.calls[0][2]["entity_id"]) == {"light.desk", "switch.lamp"}
+    assert set(remote.calls[0][2]["entity_id"]) == {
+        "light.desk",
+        "switch.lamp",
+        "light.scene_only",
+        "light.other_scene_only",
+    }
+    assert len(remote.calls[0][2]["entity_id"]) == 4
+    for entity in remote.calls[0][2]["entity_id"]:
+        assert remote.state(entity) == "off"
     assert "transition" not in remote.calls[0][2]
     assert remote.state("media_player.tv") == "on"
     assert remote.state("light.unrelated") == "on"
@@ -111,12 +142,23 @@ async def test_double_down_only_turns_off_lit_scene_lights_and_switches(make_rem
     assert len(remote.calls) == 1
 
 
-async def test_external_scene_without_member_list_never_sends_empty_target(make_remote):
+@pytest.mark.parametrize("target_on", [False, True])
+async def test_missing_scene_members_still_turns_off_targets_without_empty_calls(
+    make_remote, target_on
+):
     remote = await make_remote()
     remote.hass.states.async_set("scene.reading", "unknown")
+    remote.hass.states.async_set("switch.lamp", "on" if target_on else "off")
     await remote.send("off")
     await remote.send("off")
-    assert remote.calls == []
+    assert remote.state("switch.lamp") == "off"
+    assert remote.calls == (
+        [
+            ("homeassistant", "turn_off", {"entity_id": ["switch.lamp"]}),
+        ]
+        if target_on
+        else []
+    )
 
 
 async def test_different_power_buttons_preserve_both_single_clicks(make_remote):

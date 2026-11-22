@@ -12,13 +12,13 @@ A Home Assistant automation blueprint for the four-button IKEA STYRBAR remote us
 | Button | Single click | Fast double-click | Hold |
 | --- | --- | --- | --- |
 | Up / on | Turn on the selected light or switch | Activate the selected scene | Brighten the selected light |
-| Down / off | Turn off the selected light or switch | Turn off the selected scene's lights and switches | Dim the selected light |
+| Down / off | Turn off the selected light or switch | Turn off all configured lights and switches | Dim the selected light |
 | Left | Select the previous light or switch | Select the previous scene | Warmer white, or a custom action |
 | Right | Select the next light or switch | Select the next scene | Colder white, or a custom action |
 
-Light and scene selection are independent and wrap around their respective lists. Double-clicking an arrow selects a scene without activating it or changing the selected light. Double-up applies that scene's saved states. Double-down turns off its lights and switches, including members saved as off, and leaves other domains and unrelated entities alone.
+Light and scene selection are independent and wrap around their respective lists. Double-clicking an arrow selects a scene without activating it or changing the selected light. Double-up applies that scene's saved states. Double-down is the leaving-home shortcut: it turns off every light and switch in the target list and in **all configured scenes**, regardless of which light or scene is selected. Other domains and entities outside those lists are left alone.
 
-Scenes have [no on/off state](https://www.home-assistant.io/integrations/scene/). This blueprint uses their `entity_id` attribute to find what to switch off. Scenes created in Home Assistant's scene editor or YAML expose this list. Some scenes supplied by other integrations do not: they can be activated, but double-down has no effect without a member list.
+Scenes have [no on/off state](https://www.home-assistant.io/integrations/scene/). This blueprint uses their `entity_id` attribute to include scene members in the all-off action. Scenes created in Home Assistant's scene editor or YAML expose this list. Some scenes supplied by other integrations do not: they can be activated, but their lights and switches must also be included in the target list or another scene with a member list for double-down to reach them.
 
 With scenes configured, single clicks wait for the double-click window, **350 ms** by default. A double-click consumes both taps and never runs the corresponding single-click action. Different buttons remain separate single clicks. Holds replace a pending tap of the same button and release stops the adjustment. Without scenes configured, single clicks remain immediate.
 
@@ -44,7 +44,7 @@ Reload automations and create an automation from the blueprint. Complete YAML ex
 
 ## Scene example
 
-A Reading scene might turn on a desk lamp and ceiling light. An Evening scene might dim the ceiling light, turn off the desk lamp, and turn on a floor lamp. Double-right selects Evening. Double-up applies it. Double-down switches off all its lights and switches. A single up still controls only the independently selected light.
+A Reading scene might turn on a desk lamp and ceiling light. An Evening scene might dim the ceiling light, turn off the desk lamp, and turn on a floor lamp. Double-right selects Evening. Double-up applies it. Double-down switches off the desk lamp, ceiling light and floor lamp, regardless of the selected scene. A single up still controls only the independently selected light.
 
 To make scene switching turn off lights from the previous scene, include their off states in the destination scene. Activating a scene changes only the entities saved in it. The [example scenes](examples/scenes.yaml) show this explicitly.
 
@@ -63,7 +63,7 @@ For cloud-connected bulbs, raise **Dimming Speed** to 250–400 ms if commands a
 Re-import the blueprint to update it, then reload automations. Its filename and existing input names are preserved. Existing automations need no new helpers unless you enable scenes.
 
 - **Scene double-clicks do nothing:** configure the scene list and both additional helpers. Verify the scene index helper differs from the light index helper. Check the automation trace for configuration errors.
-- **Double-down does nothing:** inspect the selected scene in **Developer tools → States**. It needs an `entity_id` attribute listing its members. Already off or unavailable members are skipped.
+- **Double-down misses a light:** include it in the target list or a configured scene. In **Developer tools → States**, check that the scene exposes an `entity_id` attribute listing its members. Already off or unavailable entities are skipped.
 - **Two singles instead of a double:** increase the double-click window. Two presses must be of the same button, with no intervening button action.
 - **Unexpected scene contents:** activate it directly in Home Assistant and check its saved states. Double-up uses `scene.turn_on` without overriding them.
 - **No response from the remote:** listen for `zha_event` in **Developer tools → Events** and check the automation targets the right ZHA device. Disable other automations controlling the same remote while diagnosing conflicts.
@@ -72,7 +72,7 @@ When reporting an issue, include your Home Assistant version, remote model/firmw
 
 ## Development
 
-The tests load this exact YAML through Home Assistant's blueprint loader and run its event triggers, templates, helpers, scenes and restart mode. Only physical device power services are simulated. They cover single/double timing, rapid mixed-button sequences, scene activation/shutdown, holds/releases, custom actions, capability detection and selection-flash restoration.
+The tests load this exact YAML through Home Assistant's blueprint loader and run its event triggers, templates, helpers, scenes and restart mode. Only physical device power services are simulated. They cover single/double timing, rapid mixed-button sequences, scene activation and all-off, holds/releases, custom actions, capability detection and selection-flash restoration.
 
 The test environment is pinned to **Home Assistant 2026.11.2** on **Python 3.14**. With [uv](https://docs.astral.sh/uv/), run without installing packages into your system Python:
 
