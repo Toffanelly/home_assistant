@@ -1,0 +1,22 @@
+# Merge these sections into configuration.yaml, then restart Home Assistant.
+# Alternatively, create equivalent Number and Text helpers in the UI.
+# The lists use zero-based indices. These maxima allow up to 100 entries.
+input_number:
+  styrbar_light_index:
+    name: STYRBAR selected light
+    min: 0
+    max: 99
+    step: 1
+    mode: box
+  styrbar_scene_index:
+    name: STYRBAR selected scene
+    min: 0
+    max: 99
+    step: 1
+    mode: box
+
+input_text:
+  styrbar_click_memory:
+    name: STYRBAR click memory
+    min: 0
+    max: 255

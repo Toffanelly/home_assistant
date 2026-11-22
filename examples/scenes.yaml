@@ -1,0 +1,22 @@
+# Append to scenes.yaml and replace the example entity IDs with your own.
+# Explicit off states make switching between these scenes predictable.
+- id: styrbar_reading
+  name: Reading
+  entities:
+    light.desk:
+      state: "on"
+      brightness: 200
+      color_temp_kelvin: 3500
+    light.ceiling:
+      state: "on"
+      brightness: 150
+    switch.floor_lamp: "off"
+
+- id: styrbar_evening
+  name: Evening
+  entities:
+    light.desk: "off"
+    light.ceiling:
+      state: "on"
+      brightness: 50
+    switch.floor_lamp: "on"

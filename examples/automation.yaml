@@ -1,0 +1,20 @@
+# Append to automations.yaml after importing the blueprint.
+# Replace the ZHA device ID and example entity IDs with your own.
+- id: styrbar_lights_and_scenes
+  alias: STYRBAR lights and scenes
+  use_blueprint:
+    path: Toffanelly/ikea_styrbar_remote-control_multiple_entities.yaml
+    input:
+      switch_remote: REPLACE_WITH_ZHA_DEVICE_ID
+      targets:
+        - light.desk
+        - light.ceiling
+        - switch.floor_lamp
+      selected_target: input_number.styrbar_light_index
+      scenes:
+        - scene.reading
+        - scene.evening
+      selected_scene: input_number.styrbar_scene_index
+      click_memory: input_text.styrbar_click_memory
+      double_click_window: 350
+      arrow_hold_behavior: color_temp
