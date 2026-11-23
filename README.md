@@ -1,11 +1,11 @@
 # IKEA STYRBAR: lights and scenes
 
-[![Tests](https://github.com/Toffanelly/home_assistant/actions/workflows/test.yml/badge.svg)](https://github.com/Toffanelly/home_assistant/actions/workflows/test.yml)
+[![Tests](https://github.com/Toffanelly/ikea-styrbar-zha/actions/workflows/test.yml/badge.svg)](https://github.com/Toffanelly/ikea-styrbar-zha/actions/workflows/test.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 A Home Assistant automation blueprint for the four-button IKEA STYRBAR remote using **ZHA**. Select and control individual lights or switches, hold to adjust brightness or colour temperature, and double-click to control scenes with several lights.
 
-[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FToffanelly%2Fhome_assistant%2Fblob%2Fmain%2Fautomation%2Fikea_styrbar_remote-control_multiple_entities.yaml)
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FToffanelly%2Fikea-styrbar-zha%2Fblob%2Fmain%2Fikea_styrbar.yaml)
 
 ## Controls
 
@@ -34,10 +34,10 @@ With scenes configured, single clicks wait for the double-click window, **350 ms
 
 Give every remote its own helpers and create one automation per remote. Keep the two index helpers distinct. The first entry in each list is index `0`. The selected scene index is visible in its Number helper, which can also be shown on a dashboard.
 
-For manual installation, copy [the blueprint](automation/ikea_styrbar_remote-control_multiple_entities.yaml) to:
+For manual installation, copy [the blueprint](ikea_styrbar.yaml) to:
 
 ```text
-config/blueprints/automation/Toffanelly/ikea_styrbar_remote-control_multiple_entities.yaml
+config/blueprints/automation/Toffanelly/ikea_styrbar.yaml
 ```
 
 Reload automations and create an automation from the blueprint. Complete YAML examples are in [examples/helpers.yaml](examples/helpers.yaml), [examples/scenes.yaml](examples/scenes.yaml), and [examples/automation.yaml](examples/automation.yaml). Replace the example device and entity IDs with your own. Match the `use_blueprint.path` to the location shown by your installation.
@@ -60,7 +60,15 @@ For cloud-connected bulbs, raise **Dimming Speed** to 250–400 ms if commands a
 
 ## Updating and troubleshooting
 
-Re-import the blueprint to update it, then reload automations. Its filename and existing input names are preserved. Existing automations need no new helpers unless you enable scenes.
+Re-import the blueprint to update it, then reload automations. Existing input names are preserved. Existing automations need no new helpers unless you enable scenes.
+
+If you installed the earlier version from `Toffanelly/home_assistant`, the published file has moved and the old import link no longer points to the blueprint. Migrate once as follows:
+
+1. Download [ikea_styrbar.yaml](ikea_styrbar.yaml).
+2. Replace the contents of your existing installed file at `config/blueprints/automation/Toffanelly/ikea_styrbar_remote-control_multiple_entities.yaml`, keeping that local filename.
+3. Reload automations.
+
+This preserves your automations’ `use_blueprint.path` values and inputs, and updates the blueprint’s `source_url` to the new address. New installations use `Toffanelly/ikea_styrbar.yaml` as shown above.
 
 - **Scene double-clicks do nothing:** configure the scene list and both additional helpers. Verify the scene index helper differs from the light index helper. Check the automation trace for configuration errors.
 - **Double-down misses a light:** include it in the target list or a configured scene. In **Developer tools → States**, check that the scene exposes an `entity_id` attribute listing its members. Already off or unavailable entities are skipped.

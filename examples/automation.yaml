@@ -3,7 +3,7 @@
 - id: styrbar_lights_and_scenes
   alias: STYRBAR lights and scenes
   use_blueprint:
-    path: Toffanelly/ikea_styrbar_remote-control_multiple_entities.yaml
+    path: Toffanelly/ikea_styrbar.yaml
     input:
       switch_remote: REPLACE_WITH_ZHA_DEVICE_ID
       targets:

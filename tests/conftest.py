@@ -11,10 +11,7 @@ from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.setup import async_setup_component
 
-BLUEPRINT = (
-    Path(__file__).parents[1]
-    / "automation/ikea_styrbar_remote-control_multiple_entities.yaml"
-)
+BLUEPRINT = Path(__file__).parents[1] / "ikea_styrbar.yaml"
 
 
 async def settle():
@@ -127,7 +124,10 @@ async def make_remote(tmp_path, caplog):
                 {
                     "alias": "Remote",
                     "id": "remote_test",
-                    "use_blueprint": {"path": "test/styrbar.yaml", "input": inputs},
+                    "use_blueprint": {
+                        "path": "Toffanelly/ikea_styrbar.yaml",
+                        "input": inputs,
+                    },
                 }
             ],
         }
@@ -149,7 +149,7 @@ async def make_remote(tmp_path, caplog):
                     "max_color_temp_kelvin": 6500,
                 },
             )
-        destination = tmp_path / "blueprints/automation/test/styrbar.yaml"
+        destination = tmp_path / "blueprints/automation/Toffanelly/ikea_styrbar.yaml"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(BLUEPRINT, destination)
         for domain in ("input_number", "input_text", "scene", "automation"):

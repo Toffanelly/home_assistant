@@ -12,7 +12,7 @@ blueprint:
     off all configured lights and switches, including members of every configured
     scene. Scene selection does not activate the scene.
   domain: automation
-  source_url: https://github.com/Toffanelly/home_assistant/blob/main/automation/ikea_styrbar_remote-control_multiple_entities.yaml
+  source_url: https://github.com/Toffanelly/ikea-styrbar-zha/blob/main/ikea_styrbar.yaml
   input:
     switch_remote:
       name: Styrbar switch remote
