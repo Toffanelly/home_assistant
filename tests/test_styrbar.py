@@ -520,3 +520,86 @@ async def test_legacy_single_arrows_select_correct_direction(
     await remote.send("press", 5, [arg, 0, 0])
     assert remote.state("input_number.target") == expected
     assert remote.calls == []
+
+
+@pytest.mark.parametrize("group_entity", ["light.living_room", "group.living_room"])
+async def test_double_down_custom_group_replaces_default_and_skips_dark_members(
+    make_remote, group_entity
+):
+    remote = await make_remote(
+        light_group=True,
+        double_down_targets=[group_entity, "light.desk"],
+    )
+    remote.hass.states.async_set(
+        "light.desk", "on", dict(remote.hass.states.get("light.desk").attributes)
+    )
+    remote.hass.states.async_set("switch.lamp", "on")
+    remote.hass.states.async_set("light.unavailable", "unavailable")
+    remote.hass.states.async_set("media_player.tv", "on")
+    if group_entity.startswith("group."):
+        remote.hass.states.async_set(
+            group_entity,
+            "on",
+            {
+                "entity_id": [
+                    "light.living_room",
+                    "light.unavailable",
+                    "media_player.tv",
+                ],
+            },
+        )
+    await remote.send("off")
+    assert remote.calls == []
+    await remote.send("off")
+    assert remote.calls == [
+        ("homeassistant", "turn_off", {"entity_id": ["light.desk"]})
+    ]
+    assert remote.state("light.desk") == "off"
+    assert remote.state("light.ceiling") == "off"
+    assert remote.state("switch.lamp") == "on"
+    assert remote.state("media_player.tv") == "on"
+
+
+@pytest.mark.parametrize("state", ["off", "unavailable", None])
+async def test_custom_double_down_never_falls_back_to_default(make_remote, state):
+    remote = await make_remote(double_down_targets=["light.custom"])
+    if state is not None:
+        remote.hass.states.async_set("light.custom", state)
+    remote.hass.states.async_set(
+        "light.desk", "on", dict(remote.hass.states.get("light.desk").attributes)
+    )
+    await remote.send("off")
+    await remote.send("off")
+    assert remote.calls == []
+    assert remote.state("light.desk") == "on"
+
+
+async def test_custom_double_down_accepts_individual_lights_and_switches(make_remote):
+    remote = await make_remote(double_down_targets=["light.desk", "switch.lamp"])
+    for entity in ("light.desk", "light.ceiling", "switch.lamp"):
+        remote.hass.states.async_set(
+            entity, "on", dict(remote.hass.states.get(entity).attributes)
+        )
+    await remote.send("off")
+    await remote.send("off")
+    assert len(remote.calls) == 1
+    assert set(remote.calls[0][2]["entity_id"]) == {"light.desk", "switch.lamp"}
+    assert remote.state("light.ceiling") == "on"
+
+
+async def test_custom_double_down_leaves_single_power_and_scene_up_unchanged(
+    make_remote,
+):
+    remote = await make_remote(double_down_targets=["light.ceiling"])
+    await remote.send("on")
+    await remote.wait()
+    assert remote.state("light.desk") == "on"
+    assert remote.state("light.ceiling") == "off"
+    await remote.send("off")
+    await remote.wait()
+    assert remote.state("light.desk") == "off"
+    await remote.send("on")
+    await remote.send("on")
+    assert remote.state("light.desk") == "on"
+    assert remote.state("light.ceiling") == "on"
+    assert remote.state("switch.lamp") == "on"

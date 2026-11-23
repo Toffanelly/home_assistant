@@ -10,7 +10,8 @@ blueprint:
     level a bulb returns to when switched back on is left untouched. Optionally,
     double-click arrows to select a scene, up to activate it, or down to switch
     off all configured lights and switches, including members of every configured
-    scene. Scene selection does not activate the scene.
+    scene, or an optional group of your choice. Scene selection does not activate
+    the scene.
   domain: automation
   source_url: https://github.com/Toffanelly/ikea-styrbar-zha/blob/main/ikea_styrbar.yaml
   input:
@@ -35,15 +36,27 @@ blueprint:
     scenes:
       name: Scenes (optional)
       description: >-
-        Ordered scene list. Double-down switches off all targets plus the lights
-        and switches listed in every scene's entity_id attribute. Activating a
-        scene applies its saved states, including any saved off states.
+        Ordered scene list. Activating a scene applies its saved states, including
+        any saved off states. By default, double-down switches off all targets
+        plus the lights and switches listed in every scene's entity_id attribute.
       default: []
       selector:
         entity:
           multiple: true
           filter:
             - domain: scene
+    double_down_targets:
+      name: Double-down Targets (optional)
+      description: >-
+        With scene controls enabled, double-down switches off only these lights,
+        switches or groups, for example light.living_room. Leave empty to switch
+        off all targets and all configured scenes' lights and switches instead.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: [light, switch, group]
     selected_scene:
       name: Scene Index Helper (optional)
       description: >-
@@ -178,6 +191,7 @@ action:
       target_entities: !input targets
       helper: !input selected_target
       scene_entities: !input scenes
+      off_entities: !input double_down_targets
       scene_helper: !input selected_scene
       click_helper: !input click_memory
       click_window: !input double_click_window
@@ -362,11 +376,13 @@ action:
                   sequence:
                     - variables:
                         all_on_entities: >-
-                          {%- set ns = namespace(entities=expand(target_entities)) -%}
-                          {%- for scene in scene_entities -%}
-                            {%- set ns.entities = ns.entities
-                                + expand(state_attr(scene, 'entity_id') | default([], true)) -%}
-                          {%- endfor -%}
+                          {%- set ns = namespace(entities=expand(off_entities if off_entities else target_entities)) -%}
+                          {%- if not off_entities -%}
+                            {%- for scene in scene_entities -%}
+                              {%- set ns.entities = ns.entities
+                                  + expand(state_attr(scene, 'entity_id') | default([], true)) -%}
+                            {%- endfor -%}
+                          {%- endif -%}
                           {{ ns.entities
                              | selectattr('domain', 'in', ['light', 'switch'])
                              | selectattr('state', 'eq', 'on')

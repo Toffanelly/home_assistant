@@ -76,7 +76,7 @@ async def make_remote(tmp_path, caplog):
 
     hass.bus.async_listen(EVENT_CALL_SERVICE, record_service)
 
-    async def factory(*, scenes=True, **overrides):
+    async def factory(*, scenes=True, light_group=False, **overrides):
         inputs = {
             "switch_remote": "test_remote",
             "targets": ["light.desk", "light.ceiling", "switch.lamp"],
@@ -131,6 +131,14 @@ async def make_remote(tmp_path, caplog):
                 }
             ],
         }
+        if light_group:
+            config["light"] = [
+                {
+                    "platform": "group",
+                    "name": "Living room",
+                    "entities": ["light.desk", "light.ceiling"],
+                }
+            ]
         for entity, modes, features in [
             ("light.desk", ["color_temp"], 32),
             ("light.ceiling", ["brightness"], 0),
@@ -152,7 +160,10 @@ async def make_remote(tmp_path, caplog):
         destination = tmp_path / "blueprints/automation/Toffanelly/ikea_styrbar.yaml"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(BLUEPRINT, destination)
-        for domain in ("input_number", "input_text", "scene", "automation"):
+        domains = ["input_number", "input_text", "scene"]
+        if light_group:
+            domains.append("light")
+        for domain in [*domains, "automation"]:
             assert await async_setup_component(hass, domain, deepcopy(config))
         await hass.async_start()
         await hass.async_block_till_done()

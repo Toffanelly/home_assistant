@@ -16,5 +16,7 @@
         - scene.evening
       selected_scene: input_number.styrbar_scene_index
       click_memory: input_text.styrbar_click_memory
+      # Optional: set [light.living_room] to restrict double-down to that group.
+      double_down_targets: []
       double_click_window: 350
       arrow_hold_behavior: color_temp
