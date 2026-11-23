@@ -232,7 +232,7 @@ async def test_dimming_and_release_preserve_direction(
     assert len(remote.calls) == count
 
 
-@pytest.mark.parametrize("arg, expected", [(3328, 3100), (3329, 2900)])
+@pytest.mark.parametrize("arg, expected", [(3328, 3150), (3329, 2850)])
 async def test_temperature_holds_and_release(make_remote, arg, expected):
     remote = await make_remote(arrow_hold_behavior="color_temp")
     await remote.send("hold", 5, [arg, 0])
@@ -603,3 +603,37 @@ async def test_custom_double_down_leaves_single_power_and_scene_up_unchanged(
     assert remote.state("light.desk") == "on"
     assert remote.state("light.ceiling") == "on"
     assert remote.state("switch.lamp") == "on"
+
+
+@pytest.mark.parametrize("features", [0, 32])
+@pytest.mark.parametrize(
+    "command,cluster,args",
+    [
+        ("on", 6, []),
+        ("move_with_on_off", 8, [0, 83]),
+        ("hold", 5, [3328, 0]),
+    ],
+)
+async def test_transition_smoothness_input_is_used_when_supported(
+    make_remote, features, command, cluster, args
+):
+    remote = await make_remote(
+        scenes=False,
+        transition_time=0.7,
+        arrow_hold_behavior="color_temp",
+    )
+    attrs = dict(remote.hass.states.get("light.desk").attributes)
+    remote.hass.states.async_set(
+        "light.desk", "off", {**attrs, "supported_features": features}
+    )
+    await remote.send(command, cluster, args)
+    assert remote.calls
+    data = remote.calls[0][2]
+    if features:
+        assert data["transition"] == 0.7
+    else:
+        assert "transition" not in data
+    if command == "move_with_on_off":
+        await remote.send("stop", 8)
+    elif command == "hold":
+        await remote.send("release", 5, [3328, 0])

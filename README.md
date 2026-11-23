@@ -51,6 +51,8 @@ YAML examples: [helpers](examples/helpers.yaml), [scenes](examples/scenes.yaml),
 
 - Increase **Double-click Window** for slower taps. Its 150–600 ms range also sets single-click latency.
 - For slow Wi-Fi/cloud bulbs, try **Dimming Speed** at 250–400 ms.
+- **Colour Temperature Step** defaults to **150 K** per step while holding an arrow.
+- **Transition Smoothness (s)** defaults to **0.3 s** for power, brightness and temperature changes on supported lights. Set it to `0` for immediate changes.
 - Include explicit off states in a scene to turn off lights from the previous scene when switching.
 - Selection flash preserves the selected entity's state and remembered brightness. **Force Brightness** applies to single-up, while scenes retain their saved values.
 

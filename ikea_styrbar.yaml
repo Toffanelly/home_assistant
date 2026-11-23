@@ -118,7 +118,9 @@ blueprint:
         number: {min: 1, max: 100, mode: slider}
     transition_time:
       name: Transition Smoothness (s)
-      description: "How long the bulb takes to reach the next brightness level. Try 0.2 to 0.4 for smoothness. Ignored for lights that do not support transitions."
+      description: >-
+        Duration of on/off, brightness and colour temperature changes on lights
+        that support transitions. Set to 0 for immediate changes.
       default: 0.3
       selector:
         number: {min: 0, max: 2, step: 0.1, mode: slider}
@@ -141,14 +143,10 @@ blueprint:
     color_temp_step:
       name: Colour Temperature Step (K)
       description: >-
-        Kelvin added or removed per step while an arrow is held. The ramp is
-        paced by "Dimming Speed" above and stops at whatever range the bulb
-        reports, so it never has to be tuned per bulb. The default crosses a
-        typical bulb's whole range in roughly three seconds; raise it if that
-        feels sluggish, lower it if the ends arrive too fast to stop on a
-        middle value. Only used when the setting above is "Adjust colour
-        temperature".
-      default: 100
+        Kelvin added or removed per step while an arrow is held. Uses "Dimming
+        Speed" and stops at the light's reported limits. Only used with
+        "Adjust colour temperature".
+      default: 150
       selector:
         number: {min: 25, max: 1000, step: 25, mode: slider}
     arrow_left_hold:
@@ -592,7 +590,7 @@ action:
                         # state late cannot stall the ramp.
                         - variables:
                             ct_target: >-
-                              {%- set delta = (ct_step | int(250)) * (repeat.index | int(1)) -%}
+                              {%- set delta = (ct_step | int(150)) * (repeat.index | int(1)) -%}
                               {%- set raw = ct_start | int + (delta if colder else -delta) -%}
                               {{ [[raw, ct_min | int] | max, ct_max | int] | min }}
 
